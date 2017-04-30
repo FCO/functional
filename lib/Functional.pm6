@@ -70,10 +70,10 @@ class Composed is Curry {
 	sub build-signature(@funcs) { @funcs.tail.signature }
 
 	sub build-func(@funcs) {
-		$ //= -> |c {
+		-> |c {
 			sub rec-run([&f, *@fs], Capture \cap) {
 				do if not @fs {
-					f |cap
+					f |cap;
 				} else {
 					f rec-run @fs, cap;
 				}
