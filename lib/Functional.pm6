@@ -1,18 +1,23 @@
 use MONKEY-SEE-NO-EVAL;
-class Function is Callable {
+class Composed {...}
+class Curry is Callable {
 	has 			&.func;
 	has Capture 	$.capture = \();
 	has 			%!cache;
-	has Signature	$.signature = EVAL ":({
-		&!func.signature.params.skip(+$!capture).map(*.perl).join(", ")
-	} --> {&!func.signature.returns.perl})";
+	has Signature	$.signature = self!build-signature;
+
+	method !build-signature {
+		EVAL ":({
+			&!func.?signature.params.skip(+$!capture).map(*.perl).join(", ")
+		} --> {&!func.?signature.returns.perl})";
+	}
 
 	method !complete-capture(|c) {
 		\(|$!capture, |c)
 	}
 
-	method count {state $c //= $.signature.count}
-	method arity {state $a //= $.signature.arity}
+	method count {state $c //= $!signature.count}
+	method arity {state $a //= $!signature.arity}
 
 	proto method CALL-ME(|c) is hidden-from-backtrace {
 		do if %!cache{c.perl}:exists {
@@ -42,30 +47,73 @@ class Function is Callable {
 
 	method assuming(|c) { $.CALL-ME(|c) }
 
-	multi method compose(&p, *@ps) {
-		$.compose(&p.compose: |@ps.map: -> &func { &func ~~ Function ?? &func !! function &func })
+	multi method compose(&p, *@ps --> Composed) {
+		$.compose(&p).compose: |@ps>>.&curry
 	}
 
-	multi method compose(&p) {
+	multi method compose(&p --> Composed) {
 		unless
 			$.signature.params.head.type ~~ &p.signature.returns
 			and $.signature.params.head.constraints ~~ &p.signature.returns
 		{
 			die "Impossible to compose a func that returns {&p.signature.returns.perl} with a func receiving {$.signature.perl}"
 		}
-		self.new: :func(-> |c {self.(p(|c))}), :signature(&p.signature)
+		Composed.new: :funcs[self, |Composed.compose-to-curry-arr(&p)]
 	}
 }
 
-sub function(&func)						is export	{ Function.new: :func(&func) }
-multi int-compose(Function &func)					{ &func }
-multi int-compose(&func)							{ function(&func) }
-multi int-compose(Function &func, *@funcs)			{ &func.compose: |@funcs }
-multi int-compose(&func, *@funcs)					{ function(&func).compose: |@funcs }
-our &compose	is export = &int-compose;
-sub mcompose(*@funcs)					is export	{ compose |@funcs.map: { fmap $_ } }
-sub lift(&func)							is export	{
-	Function.new: :func(Function.new: :func(-> *@args {
+class Composed is Curry {
+	my %cache;
+	has @.funcs where *.elems >= 1;
+	has Str $.key;
+
+	sub build-signature(@funcs) { @funcs.tail.signature }
+
+	sub build-func(@funcs) {
+		$ //= -> |c {
+			sub rec-run([&f, *@fs], Capture \cap) {
+				do if not @fs {
+					f |cap
+				} else {
+					f rec-run @fs, cap;
+				}
+			}
+			rec-run @funcs, c
+		}
+	}
+
+	method BUILDALL(%pars) {
+		%pars<func>			//= build-func(%pars<funcs> // []);
+		%pars<signature>	//= build-signature(%pars<funcs>);
+
+		my $key = "{%pars<funcs>.map(*.WHICH).join: ", "} -> {%pars<capture>.WHICH}";
+
+		do with %cache{$key} {
+			$_
+		} else {
+			%pars<key> = $key;
+			%cache{$key} := callwith %pars;
+		}
+	}
+
+	multi method compose-to-curry-arr(Composed:U: $c) {
+		[$c]
+	}
+	multi method compose-to-curry-arr(Composed:U: Composed $c) {
+		[|$c.funcs.head(*-1).flatmap({Composed.compose-to-curry-arr: $_}), curry($c.funcs.tail).(|$c.capture)]
+	}
+
+	method compose(*@f --> Composed) {
+		self.new: :funcs[|Composed.compose-to-curry-arr(self), |@f.flatmap({Composed.compose-to-curry-arr: $_})]
+	}
+}
+
+multi curry(Curry \func) is default     is export	{ func }
+multi curry(&func)                      is export	{ Curry.new: :func(&func) }
+sub compose(&f, *@funcs)                is export	{ curry(&f).compose: |@funcs>>.&curry }
+sub mcompose(*@funcs)                   is export	{ compose |@funcs.map: { fmap $_ } }
+sub lift(&func)                         is export	{
+	Curry.new: :func(Curry.new: :func(-> *@args {
 		do if @args.all.defined {
 			func |@args
 		} else {
@@ -75,7 +123,7 @@ sub lift(&func)							is export	{
 }
 our &fmap		is export;
 our &either 	is export;
-&fmap = function -> &func, \maybe {
+&fmap = curry -> &func, \maybe {
 	given maybe {
 		when Failure {
 			maybe
@@ -88,12 +136,12 @@ our &either 	is export;
 		}
 	}
 }
-&either = function -> Any:D $left, $right {
+&either = curry -> Any:D $left, $right {
 	do with $right {
 		$_
 	} else { fail $left }
 }
 
-multi infix:<o>(Function $a, Function $b) is export {$a.compose($b)}
-multi infix:<o>(Function $a, Callable $b) is export {$a.compose($b)}
-multi infix:<o>(Callable $a, Function $b) is export {$a.compose($b)}
+multi infix:<o>(Curry $a, Curry $b)     is export {compose $a, $b}
+multi infix:<o>(Curry $a, Callable $b)  is export {compose $a, $b}
+multi infix:<o>(Callable $a, Curry $b)  is export {compose $a, $b}

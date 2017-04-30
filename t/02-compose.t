@@ -2,11 +2,11 @@ use Test;
 use lib "lib";
 use Functional;
 
-my &add		:= function * + *;
-my &incr	:= add 1;
-my &mult	:= function * × *;
+my &add     := curry * + *;
+my &incr    := add 1;
+my &mult    := curry * × *;
 
-is compose(incr, mult).WHAT, Function;
-is compose(compose(add(1), incr, mult(3))).($_), compose(add(1), compose(incr, mult(3))).($_) for ^10;
+is compose(incr, mult).WHAT, Composed;
+is compose(compose(add(1), incr), mult(3)).WHERE, compose(add(1), compose(incr, mult(3))).WHERE;
 
 done-testing
